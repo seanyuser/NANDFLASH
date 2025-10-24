@@ -120,6 +120,13 @@ bool FTL::garbage_collect() {
         }
     }
 
+    // ✅ --- [요청하신 출력 코드] ---
+    //std::cout << "[GC] Victim: " << std::setw(3) << victim_idx 
+    //          << " | HotPagesToCopy: " << std::setw(2) << hot_pages_to_copy 
+    //          << " | ColdPagesToCopy: " << std::setw(2) << cold_pages_to_copy 
+    //          << std::endl;
+    // ------------------------------
+
     // 2. "스마트 병합" 시도: Active 블록에 공간이 있는지 확인
     Block& hot_active = nand_.blocks[hot_active_block_];
     Block& cold_active = nand_.blocks[cold_active_block_];
@@ -170,20 +177,26 @@ bool FTL::garbage_collect() {
         return false; 
     }
 
+    // --- (이하 for 루프는 기존과 동일) ---
     for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
         if (victim_block.pages[i].state == PageState::VALID) {
+            // ✅ --- 수정된 복사 로직 시작 ---
             int lpn = victim_block.pages[i].logical_page_number;
-            PPA new_ppa = {new_block_idx, nand_.blocks[new_block_idx].current_page};
             bool is_hot = (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD);
             
             PPA new_ppa;
             if (is_hot) {
+                // "new_hot_block"의 다음 빈 페이지에 쓴다
                 new_ppa = {new_hot_block, nand_.blocks[new_hot_block].current_page};
             } else {
+                // "new_cold_block"의 다음 빈 페이지에 쓴다
                 new_ppa = {new_cold_block, nand_.blocks[new_cold_block].current_page};
             }
+            
+            // 물리적 쓰기 및 L2P 맵 갱신
             nand_.write(new_ppa.block, new_ppa.page, lpn);
             l2p_mapping_[lpn] = new_ppa;
+            // ✅ --- 수정된 복사 로직 끝 ---
         }
     }
     
@@ -306,5 +319,3 @@ void FTL::print_debug_state() {
     }
     std::cout << "-----------------------------------------------\n" << std::endl;
 }
-
-
