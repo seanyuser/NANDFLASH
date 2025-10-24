@@ -170,10 +170,20 @@ bool FTL::garbage_collect() {
         return false; 
     }
 
-    // --- (이하 for 루프는 기존과 동일) ---
     for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
         if (victim_block.pages[i].state == PageState::VALID) {
-            // ( ... 기존 복사 로직 ... )
+            int lpn = victim_block.pages[i].logical_page_number;
+            PPA new_ppa = {new_block_idx, nand_.blocks[new_block_idx].current_page};
+            bool is_hot = (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD);
+            
+            PPA new_ppa;
+            if (is_hot) {
+                new_ppa = {new_hot_block, nand_.blocks[new_hot_block].current_page};
+            } else {
+                new_ppa = {new_cold_block, nand_.blocks[new_cold_block].current_page};
+            }
+            nand_.write(new_ppa.block, new_ppa.page, lpn);
+            l2p_mapping_[lpn] = new_ppa;
         }
     }
     
@@ -296,4 +306,5 @@ void FTL::print_debug_state() {
     }
     std::cout << "-----------------------------------------------\n" << std::endl;
 }
+
 
