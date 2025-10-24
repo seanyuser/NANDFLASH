@@ -97,7 +97,7 @@ int FTL::count_free_blocks() {
 }
 
 
-// ✅ "Hot/Cold 분리 GC" 로직 (전면 수정)
+// ✅ "Hot/Cold 분리 GC" 로직 (블록 낭비 버그 수정됨)
 bool FTL::garbage_collect() {
     int victim_idx = find_victim_block_greedy();
     if (victim_idx == -1) {
@@ -112,6 +112,7 @@ bool FTL::garbage_collect() {
     for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
         if (victim_block.pages[i].state == PageState::VALID) {
             int lpn = victim_block.pages[i].logical_page_number;
+            // ✅ 이 논리는 항상 false이지만, (이전 논의처럼) 연산 오버헤드 외에 해가 없음
             if (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD) {
                 hot_pages_to_copy++;
             } else {
@@ -120,12 +121,12 @@ bool FTL::garbage_collect() {
         }
     }
 
-    // ✅ --- [요청하신 출력 코드] ---
-    //std::cout << "[GC] Victim: " << std::setw(3) << victim_idx 
-    //          << " | HotPagesToCopy: " << std::setw(2) << hot_pages_to_copy 
-    //          << " | ColdPagesToCopy: " << std::setw(2) << cold_pages_to_copy 
-    //          << std::endl;
-    // ------------------------------
+    // 💡 [수정됨] 디버그 출력을 원하면 이 줄의 주석을 해제하세요.
+    // std::cout << "[GC] Victim: " << std::setw(3) << victim_idx 
+    //           << " | HotPagesToCopy: " << std::setw(2) << hot_pages_to_copy 
+    //           << " | ColdPagesToCopy: " << std::setw(2) << cold_pages_to_copy 
+    //           << std::endl;
+
 
     // 2. "스마트 병합" 시도: Active 블록에 공간이 있는지 확인
     Block& hot_active = nand_.blocks[hot_active_block_];
@@ -138,6 +139,7 @@ bool FTL::garbage_collect() {
         for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
             if (victim_block.pages[i].state == PageState::VALID) {
                 int lpn = victim_block.pages[i].logical_page_number;
+                // ✅ 이 로직도 항상 false이지만, 해가 없음
                 bool is_hot = (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD);
                 
                 PPA new_ppa;
@@ -156,54 +158,69 @@ bool FTL::garbage_collect() {
 
     // --- 전략 2: "스마트 복사" (병합 실패 시) ---
     
-    int new_hot_block = get_free_block();
-    if (new_hot_block == -1) {
-        std::cerr << "GC Fatal Error: Not enough free blocks for Hot copy!" << std::endl;
-        return false;
+    // ✅ [수정됨] 필요한 블록만 할당하도록 로직 변경
+    int new_hot_block = -1;
+    int new_cold_block = -1;
+    int original_hot_active = hot_active_block_;
+    int original_cold_active = cold_active_block_;
+
+    if (hot_pages_to_copy > 0) {
+        new_hot_block = get_free_block();
+        if (new_hot_block == -1) {
+             std::cerr << "GC Fatal Error: Not enough free blocks for Hot copy!" << std::endl;
+             return false;
+        }
+        // 임시 설정 (get_free_block 중복 할당 방지)
+        hot_active_block_ = new_hot_block; 
     }
 
-    // ✅ FIX: new_hot_block을 "임시" Active Block으로 설정하여
-    // get_free_block()이 중복된 블록을 반환하지 않도록 함
-    int original_hot_active = hot_active_block_; // 원래 블록 저장
-    hot_active_block_ = new_hot_block;           // 임시 설정
-
-    int new_cold_block = get_free_block(); 
+    if (cold_pages_to_copy > 0) {
+        new_cold_block = get_free_block();
+        // 임시 설정 복구
+        hot_active_block_ = original_hot_active; 
+        if (new_cold_block == -1) {
+             std::cerr << "GC Fatal Error: Not enough free blocks for Cold copy!" << std::endl;
+             return false; 
+        }
+        // 임시 설정 (get_free_block 중복 할당 방지)
+        cold_active_block_ = new_cold_block;
+    }
     
-    hot_active_block_ = original_hot_active;     // 원래대로 복구
+    // 임시 설정 모두 원래대로 복구
+    hot_active_block_ = original_hot_active;
+    cold_active_block_ = original_cold_active;
 
-    if (new_cold_block == -1) {
-        std::cerr << "GC Fatal Error: Not enough free blocks for Cold copy!" << std::endl;
-        // (참고: new_hot_block을 예비 블록으로 다시 반납하는 로직이 필요할 수 있음)
-        return false; 
-    }
 
     // --- (이하 for 루프는 기존과 동일) ---
     for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
         if (victim_block.pages[i].state == PageState::VALID) {
-            // ✅ --- 수정된 복사 로직 시작 ---
             int lpn = victim_block.pages[i].logical_page_number;
+            // ✅ 이 로직도 항상 false이지만, 해가 없음
             bool is_hot = (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD);
             
             PPA new_ppa;
             if (is_hot) {
-                // "new_hot_block"의 다음 빈 페이지에 쓴다
+                // 이 경로는 hot_pages_to_copy > 0 일 때만 실행됨
                 new_ppa = {new_hot_block, nand_.blocks[new_hot_block].current_page};
             } else {
-                // "new_cold_block"의 다음 빈 페이지에 쓴다
+                // 이 경로는 cold_pages_to_copy > 0 일 때만 실행됨
                 new_ppa = {new_cold_block, nand_.blocks[new_cold_block].current_page};
             }
             
-            // 물리적 쓰기 및 L2P 맵 갱신
             nand_.write(new_ppa.block, new_ppa.page, lpn);
             l2p_mapping_[lpn] = new_ppa;
-            // ✅ --- 수정된 복사 로직 끝 ---
         }
     }
     
     nand_.erase(victim_idx);
 
-    hot_active_block_ = new_hot_block;
-    cold_active_block_ = new_cold_block;
+    // ✅ [수정됨] 새 블록이 할당된 경우에만 Active Block을 교체
+    if (new_hot_block != -1) {
+        hot_active_block_ = new_hot_block;
+    }
+    if (new_cold_block != -1) {
+        cold_active_block_ = new_cold_block;
+    }
     
     return true;
 }
