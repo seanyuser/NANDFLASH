@@ -1,3 +1,5 @@
+// 덮어쓸 파일: hot_cold_consider/main_mixed.cpp
+
 #include <iostream>
 #include <cstdlib>
 #include <ctime>
@@ -5,7 +7,7 @@
 #include <numeric>
 #include <algorithm>
 #include <iomanip>
-#include "FTL.h"
+#include "FTL.h" // ✅ Hot/Cold FTL 사용
 
 int main() {
     srand(time(0));
@@ -14,56 +16,45 @@ int main() {
     const int WRITE_PERCENTAGE = 80;
     const int NUM_SIMULATIONS = 1000;
 
-    // --- ✅ "Mixed Block" 워크로드 설정 ---
+    // --- ✅ "90/10 확률" 워크로드 설정 ---
     const double HOT_ZONE_PERCENTAGE = 0.10; // LPN의 10%가 Hot
+    const double HOT_ACCESS_PERCENTAGE = 0.90; // 쓰기의 90%가 Hot Zone에 집중
+
     const int HOT_ZONE_LPNS = static_cast<int>(NUM_LOGICAL_PAGES * HOT_ZONE_PERCENTAGE);
     const int COLD_ZONE_LPNS = NUM_LOGICAL_PAGES - HOT_ZONE_LPNS;
-
-    // "버스트(Burst)" 쓰기를 위한 상태 변수
-    bool currently_writing_hot = true;
-    int writes_remaining_in_burst = 0;
     // ------------------------------------
+
+    // 🛑 "버스트" 쓰기 관련 변수 (currently_writing_hot, writes_remaining_in_burst) 삭제
 
     std::vector<double> final_wafs;
 
-    std::cout << "Starting " << NUM_SIMULATIONS << " SSD simulations (Mixed Block Workload)..." << std::endl;
+    std::cout << "Starting " << NUM_SIMULATIONS << " SSD simulations (90/10 Workload on Hot/Cold FTL)..." << std::endl;
     std::cout << "Total operations per simulation: " << TOTAL_OPERATIONS << std::endl;
-    std::cout << "Workload: Bursty writes (Hot/Cold) designed to cause block contamination." << std::endl;
+    std::cout << "Workload: 90% of writes to 10% of LPNs (Testing Block Contamination)" << std::endl;
     std::cout << "----------------------------------------" << std::endl;
 
     for (int sim = 0; sim < NUM_SIMULATIONS; ++sim) {
-        FTL ftl;
-        currently_writing_hot = true;
-        writes_remaining_in_burst = 0;
+        FTL ftl; // ✅ Hot/Cold FTL 객체 생성
+
+        // 🛑 버스트 상태 변수 초기화 삭제
 
         for (int i = 0; i < TOTAL_OPERATIONS; ++i) {
             
-            // 쓰기 작업일 때만 Hot/Cold 버스트 로직 적용
             if ((rand() % 100) < WRITE_PERCENTAGE) {
                 
-                // ✅ 버스트 상태 갱신
-                if (writes_remaining_in_burst == 0) {
-                    // 50/50 확률로 Hot/Cold 상태 변경
-                    if (rand() % 2 == 0) {
-                        currently_writing_hot = true;
-                        // Hot Zone에 평균 30번의 버스트 쓰기
-                        writes_remaining_in_burst = (rand() % 10) + 25; 
-                    } else {
-                        currently_writing_hot = false;
-                        // Cold Zone에 평균 30번의 버스트 쓰기
-                        writes_remaining_in_burst = (rand() % 10) + 95; 
-                    }
-                }
+                // 🛑 --- [시작] 버스트 로직 (if writes_remaining_in_burst) 삭제 ---
                 
+                // ✅ --- [시작] "90/10 확률" 로직으로 교체 ---
                 int lpn;
-                if (currently_writing_hot) {
-                    // Hot Zone (LPN 0 ~ HOT_ZONE_LPNS-1)을 타겟
+                if ((rand() % 100) < (HOT_ACCESS_PERCENTAGE * 100)) {
+                    // 90% 확률: Hot Zone (LPN 0 ~ HOT_ZONE_LPNS-1)을 타겟
                     lpn = rand() % HOT_ZONE_LPNS;
                 } else {
-                    // Cold Zone (LPN HOT_ZONE_LPNS ~ 끝)을 타겟
+                    // 10% 확률: Cold Zone (LPN HOT_ZONE_LPNS ~ 끝)을 타겟
                     lpn = (rand() % COLD_ZONE_LPNS) + HOT_ZONE_LPNS;
                 }
-                writes_remaining_in_burst--; // 버스트 횟수 차감
+                // 🛑 writes_remaining_in_burst--; // 삭제
+                // ✅ --- [끝] "90/10 확률" 로직으로 교체 ---
 
                 if (!ftl.write(lpn)) {
                     std::cout << "\n--- Simulation " << sim + 1 << " stopped due to a fatal error at operation " << i + 1 << " ---" << std::endl;
@@ -85,7 +76,7 @@ int main() {
 
     std::cout << "----------------------------------------" << std::endl;
     std::cout << "All " << NUM_SIMULATIONS << " simulations finished!" << std::endl;
-    std::cout << "--- WAF Distribution Statistics (Mixed Block) ---" << std::endl;
+    std::cout << "--- WAF Distribution Statistics (Hot/Cold FTL - 90/10) ---" << std::endl;
 
     if (!final_wafs.empty()) {
         double sum = std::accumulate(final_wafs.begin(), final_wafs.end(), 0.0);

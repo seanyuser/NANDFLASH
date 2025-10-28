@@ -1,3 +1,5 @@
+// 덮어쓸 파일: hot_cold_no_consider/main_greedy.cpp
+
 #include <iostream>
 #include <cstdlib>
 #include <ctime>
@@ -10,55 +12,52 @@
 int main() {
     srand(time(0));
 
-    // (모든 설정값은 main_mixed.cpp와 100% 동일)
+    // (설정값은 위와 100% 동일)
     const int TOTAL_OPERATIONS = 50000;
     const int WRITE_PERCENTAGE = 80;
     const int NUM_SIMULATIONS = 1000; 
 
+    // --- ✅ "90/10 확률" 워크로드 설정 ---
     const double HOT_ZONE_PERCENTAGE = 0.10; 
+    const double HOT_ACCESS_PERCENTAGE = 0.90; 
+
     const int HOT_ZONE_LPNS = static_cast<int>(NUM_LOGICAL_PAGES * HOT_ZONE_PERCENTAGE);
     const int COLD_ZONE_LPNS = NUM_LOGICAL_PAGES - HOT_ZONE_LPNS;
+    // ------------------------------------
 
-    bool currently_writing_hot = true;
-    int writes_remaining_in_burst = 0;
+    // 🛑 "버스트" 쓰기 관련 변수 삭제
 
     std::vector<double> final_wafs;
 
     // ✅ "Greedy FTL"로 테스트한다는 것을 명시
-    std::cout << "Starting " << NUM_SIMULATIONS << " SSD simulations (Mixed Block Workload on Greedy FTL)..." << std::endl;
+    std::cout << "Starting " << NUM_SIMULATIONS << " SSD simulations (90/10 Workload on Greedy FTL)..." << std::endl;
     std::cout << "Total operations per simulation: " << TOTAL_OPERATIONS << std::endl;
-    std::cout << "Workload: Bursty writes (Hot/Cold) designed to cause block contamination." << std::endl;
+    std::cout << "Workload: 90% of writes to 10% of LPNs (Testing Block Contamination)" << std::endl;
     std::cout << "----------------------------------------" << std::endl;
 
     for (int sim = 0; sim < NUM_SIMULATIONS; ++sim) {
         
         FTL_Greedy ftl; // ✅ "단순 FTL" 객체 생성
         
-        currently_writing_hot = true;
-        writes_remaining_in_burst = 0;
+        // 🛑 버스트 상태 변수 초기화 삭제
 
         for (int i = 0; i < TOTAL_OPERATIONS; ++i) {
             
-            // (이하 워크로드 로직은 main_mixed.cpp와 100% 동일)
             if ((rand() % 100) < WRITE_PERCENTAGE) {
                 
-                if (writes_remaining_in_burst == 0) {
-                    if (rand() % 2 == 0) {
-                        currently_writing_hot = true;
-                        writes_remaining_in_burst = (rand() % 10) + 25; // ✅ WAF 2.49 테스트와 동일하게 25
-                    } else {
-                        currently_writing_hot = false;
-                        writes_remaining_in_burst = (rand() % 10) + 25; // ✅ WAF 2.49 테스트와 동일하게 25
-                    }
-                }
-                
+                // 🛑 --- [시작] 버스트 로직 (if writes_remaining_in_burst) 삭제 ---
+
+                // ✅ --- [시작] "90/10 확률" 로직으로 교체 ---
                 int lpn;
-                if (currently_writing_hot) {
+                if ((rand() % 100) < (HOT_ACCESS_PERCENTAGE * 100)) {
+                    // 90% 확률: Hot Zone 타겟
                     lpn = rand() % HOT_ZONE_LPNS;
                 } else {
+                    // 10% 확률: Cold Zone 타겟
                     lpn = (rand() % COLD_ZONE_LPNS) + HOT_ZONE_LPNS;
                 }
-                writes_remaining_in_burst--; 
+                // 🛑 writes_remaining_in_burst--; // 삭제
+                // ✅ --- [끝] "90/10 확률" 로직으로 교체 ---
 
                 if (!ftl.write(lpn)) {
                     std::cout << "\n--- Simulation " << sim + 1 << " stopped due to a fatal error at operation " << i + 1 << " ---" << std::endl;
@@ -79,9 +78,8 @@ int main() {
 
     std::cout << "----------------------------------------" << std::endl;
     std::cout << "All " << NUM_SIMULATIONS << " simulations finished!" << std::endl;
-    std::cout << "--- WAF Distribution Statistics (Greedy FTL) ---" << std::endl; // ✅
+    std::cout << "--- WAF Distribution Statistics (Greedy FTL - 90/10) ---" << std::endl; // ✅
 
-    // (통계 출력 로직은 100% 동일)
     if (!final_wafs.empty()) {
         double sum = std::accumulate(final_wafs.begin(), final_wafs.end(), 0.0);
         double average_waf = sum / final_wafs.size();
