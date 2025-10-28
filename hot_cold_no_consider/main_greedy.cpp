@@ -15,7 +15,7 @@ int main() {
     // (설정값은 위와 100% 동일)
     const int TOTAL_OPERATIONS = 50000;
     const int WRITE_PERCENTAGE = 80;
-    const int NUM_SIMULATIONS = 1000; 
+    const int NUM_SIMULATIONS = 300; 
 
     // --- ✅ "90/10 확률" 워크로드 설정 ---
     const double HOT_ZONE_PERCENTAGE = 0.10; 

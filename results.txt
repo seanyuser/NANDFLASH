@@ -1,0 +1,30 @@
+Starting 300 SSD simulations (90/10 Workload on Hot/Cold FTL)...
+Total operations per simulation: 50000
+Workload: 90% of writes to 10% of LPNs (Testing Block Contamination)
+----------------------------------------
+Simulation 100/300 completed.
+Simulation 200/300 completed.
+Simulation 300/300 completed.
+----------------------------------------
+All 300 simulations finished!
+--- WAF Distribution Statistics (Hot/Cold FTL - 90/10) ---
+Average WAF: 1.04101
+Min WAF:     1.03417
+Max WAF:     1.05091
+
+(Data for 300 successful runs collected)
+Starting 300 SSD simulations (90/10 Workload on Greedy FTL)...
+Total operations per simulation: 50000
+Workload: 90% of writes to 10% of LPNs (Testing Block Contamination)
+----------------------------------------
+Simulation 100/300 completed.
+Simulation 200/300 completed.
+Simulation 300/300 completed.
+----------------------------------------
+All 300 simulations finished!
+--- WAF Distribution Statistics (Greedy FTL - 90/10) ---
+Average WAF: 1.20218
+Min WAF:     1.18894
+Max WAF:     1.21584
+
+(Data for 300 successful runs collected)
