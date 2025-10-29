@@ -9,8 +9,14 @@
 #include <iomanip>
 #include "FTL.h" // ✅ Hot/Cold FTL 사용
 
+int gc_victim_strategy = 0;
+
 int main() {
     srand(time(0));
+    
+    std::cout << "Using GC Victim Strategy: " 
+              << (gc_victim_strategy == 0 ? "Smart (Max Invalid)" : "Simple (Oldest Hot First)") 
+              << std::endl;
 
     const int TOTAL_OPERATIONS = 50000;
     const int WRITE_PERCENTAGE = 80;

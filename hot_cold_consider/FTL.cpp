@@ -5,6 +5,8 @@
 #include <iomanip> 
 #include <algorithm>
 
+int gc_victim_strategy;
+
 FTL::FTL() : user_writes_(0), user_reads_(0) {
     for (int i = 0; i < NUM_BLOCKS; ++i) {
         nand_.erase(i);
@@ -212,72 +214,112 @@ bool FTL::garbage_collect() {
 
 
 // ✅ [완전히 새로 구현됨] Hot 블록 리스트를 우선 탐색하는 "Smart" GC
-int FTL::find_victim_block_smart() {
+    int FTL::find_victim_block_smart() {
     int victim_block = -1;
-    int max_invalid_pages = -1;
-    int vector_index_to_erase = -1;
+    
+    // --- 전략 0: Smart (기존 로직 - invalid 페이지 최대화) ---
+    if (gc_victim_strategy == 0) { 
+        int max_invalid_pages = -1;
+        int vector_index_to_erase = -1;
 
-    // --- 우선순위 1: "Hot 블록 리스트"에서 탐색 ---
-    for (int i = 0; i < closed_hot_blocks_.size(); ++i) {
-        int block_idx = closed_hot_blocks_[i];
+        // 우선순위 1: Hot 리스트 스캔
+        for (int i = 0; i < closed_hot_blocks_.size(); ++i) {
+            int block_idx = closed_hot_blocks_[i];
+            if (block_idx == hot_active_block_ || block_idx == cold_active_block_) continue; 
+            if (nand_.blocks[block_idx].invalid_pages > max_invalid_pages) {
+                max_invalid_pages = nand_.blocks[block_idx].invalid_pages;
+                victim_block = block_idx;
+                vector_index_to_erase = i;
+            }
+        }
+        if (max_invalid_pages > 0) {
+            closed_hot_blocks_.erase(closed_hot_blocks_.begin() + vector_index_to_erase);
+            return victim_block;
+        }
+
+        // 우선순위 2: Cold 리스트 스캔
+        max_invalid_pages = -1; 
+        vector_index_to_erase = -1;
+        for (int i = 0; i < closed_cold_blocks_.size(); ++i) {
+             int block_idx = closed_cold_blocks_[i];
+            if (block_idx == hot_active_block_ || block_idx == cold_active_block_) continue; 
+            if (nand_.blocks[block_idx].invalid_pages > max_invalid_pages) {
+                max_invalid_pages = nand_.blocks[block_idx].invalid_pages;
+                victim_block = block_idx;
+                vector_index_to_erase = i;
+            }
+        }
+        if (max_invalid_pages > 0) {
+            closed_cold_blocks_.erase(closed_cold_blocks_.begin() + vector_index_to_erase);
+            return victim_block;
+        }
         
-        // (Active Block은 이 리스트에 없어야 정상이지만, 안전장치로 확인)
-        if (block_idx == hot_active_block_ || block_idx == cold_active_block_) continue; 
-
-        if (nand_.blocks[block_idx].invalid_pages > max_invalid_pages) {
-            max_invalid_pages = nand_.blocks[block_idx].invalid_pages;
-            victim_block = block_idx;
-            vector_index_to_erase = i;
+        // 우선순위 3: Fallback (기존 로직)
+        if (!closed_cold_blocks_.empty()) {
+            victim_block = closed_cold_blocks_[0];
+            closed_cold_blocks_.erase(closed_cold_blocks_.begin());
+            return victim_block;
         }
-    }
-
-    if (max_invalid_pages > 0) {
-        // ✅ Hot 리스트에서 찾음! 리스트에서 제거하고 반환
-        closed_hot_blocks_.erase(closed_hot_blocks_.begin() + vector_index_to_erase);
-        return victim_block;
-    }
-
-    // --- 우선순위 2: "Cold 블록 리스트"에서 탐색 ---
-    // (Hot 리스트에 쓸만한 블록이 없었을 경우)
-    max_invalid_pages = -1; // (기준치 초기화)
-    vector_index_to_erase = -1;
-
-    for (int i = 0; i < closed_cold_blocks_.size(); ++i) {
-        int block_idx = closed_cold_blocks_[i];
-        if (block_idx == hot_active_block_ || block_idx == cold_active_block_) continue; 
-
-        if (nand_.blocks[block_idx].invalid_pages > max_invalid_pages) {
-            max_invalid_pages = nand_.blocks[block_idx].invalid_pages;
-            victim_block = block_idx;
-            vector_index_to_erase = i;
+        if (!closed_hot_blocks_.empty()) {
+            victim_block = closed_hot_blocks_[0];
+            closed_hot_blocks_.erase(closed_hot_blocks_.begin());
+            return victim_block;
         }
-    }
+        return -1; // 희생양 없음
+    } 
+    // --- 전략 1: Simple (사용자 제안 - 가장 오래된 Hot 블록 우선) ---
+    else if (gc_victim_strategy == 1) { 
+        // 우선순위 1: Hot 리스트의 첫 번째 블록 선택 (존재한다면)
+        if (!closed_hot_blocks_.empty()) {
+            victim_block = closed_hot_blocks_[0]; 
+            // (Active Block인지 확인하는 안전장치 추가 가능)
+            if (victim_block != hot_active_block_ && victim_block != cold_active_block_) {
+                 closed_hot_blocks_.erase(closed_hot_blocks_.begin());
+                 return victim_block;
+            }
+            // (만약 Active Block이라면, 리스트에서 제거하고 다음 우선순위로)
+             closed_hot_blocks_.erase(closed_hot_blocks_.begin()); 
+        }
 
-    if (max_invalid_pages > 0) {
-        // ✅ Cold 리스트에서 찾음! 리스트에서 제거하고 반환
-        closed_cold_blocks_.erase(closed_cold_blocks_.begin() + vector_index_to_erase);
-        return victim_block;
-    }
+        // 우선순위 2: Cold 리스트에서 invalid 최대 블록 탐색 (Hot이 없거나 Active였을 경우)
+        int max_invalid_pages = -1;
+        int vector_index_to_erase = -1;
+        for (int i = 0; i < closed_cold_blocks_.size(); ++i) {
+             int block_idx = closed_cold_blocks_[i];
+            if (block_idx == hot_active_block_ || block_idx == cold_active_block_) continue; 
+            if (nand_.blocks[block_idx].invalid_pages > max_invalid_pages) {
+                max_invalid_pages = nand_.blocks[block_idx].invalid_pages;
+                victim_block = block_idx;
+                vector_index_to_erase = i;
+            }
+        }
+         if (max_invalid_pages >= 0) { // ✅ Cold 블록은 invalid가 0이라도 선택 가능
+            // (Fallback: Cold 리스트에 블록이 있고 invalid=0인 경우 첫번째 선택)
+             if (victim_block == -1 && !closed_cold_blocks_.empty()) {
+                 victim_block = closed_cold_blocks_[0];
+                 vector_index_to_erase = 0;
+             }
+             if (victim_block != -1) {
+                closed_cold_blocks_.erase(closed_cold_blocks_.begin() + vector_index_to_erase);
+                return victim_block;
+             }
+        }
+        
+        // 우선순위 3: Fallback (Cold 리스트도 비었을 경우, 남은 Hot 블록 선택)
+        // (위에서 첫번째 Hot 블록이 Active여서 제거만 된 경우 여기에 해당)
+        if (!closed_hot_blocks_.empty()) {
+            victim_block = closed_hot_blocks_[0];
+            closed_hot_blocks_.erase(closed_hot_blocks_.begin());
+            return victim_block;
+        }
 
-    // --- 우선순위 3: Fallback (모든 닫힌 블록이 100% VALID일 때) ---
-    // (이전 Greedy의 Fallback 로직보다 단순화: Cold 블록을 우선 희생)
-    
-    if (!closed_cold_blocks_.empty()) {
-        // ✅ 가장 오래된 Cold 블록을 희생 (가장 적은 VALID 페이지 탐색으로 개선 가능)
-        victim_block = closed_cold_blocks_[0];
-        closed_cold_blocks_.erase(closed_cold_blocks_.begin());
-        return victim_block;
+        return -1; // 정말 희생양 없음
     }
-    
-    if (!closed_hot_blocks_.empty()) {
-        // ✅ Cold 블록이 다 떨어졌다면, Hot 블록이라도 희생
-        victim_block = closed_hot_blocks_[0];
-        closed_hot_blocks_.erase(closed_hot_blocks_.begin());
-        return victim_block;
+    // --- 잘못된 전략 값 ---
+    else {
+        std::cerr << "Error: Invalid gc_victim_strategy value (" << gc_victim_strategy << ")" << std::endl;
+        return -1;
     }
-
-    // ✅ 닫힌 블록 리스트가 모두 비어있다면, 희생양이 없음
-    return -1;
 }
 
 

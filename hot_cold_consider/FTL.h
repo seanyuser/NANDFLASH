@@ -8,6 +8,8 @@
 #include <map>
 #include <list> // ✅ 리스트 관리를 위해 <list> 또는 <vector> 추가 (vector 사용)
 
+extern int gc_victim_strategy;
+
 const int NUM_LOGICAL_PAGES = NUM_BLOCKS * PAGES_PER_BLOCK * 0.75;
 
 struct PPA {
