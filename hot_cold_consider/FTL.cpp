@@ -269,6 +269,43 @@ int FTL::get_free_block() {
     return -1;
 }
 
+// ✅ --- [추가] Getter 함수 구현 ---
+
+int FTL::get_hot_active_block() const {
+    return hot_active_block_;
+}
+
+int FTL::get_cold_active_block() const {
+    return cold_active_block_;
+}
+
+// 특정 블록의 Hot/Cold 페이지 수를 계산하는 함수
+void FTL::get_block_hot_cold_counts(int block_idx, int& hot_count, int& cold_count) const {
+    hot_count = 0;
+    cold_count = 0;
+    if (block_idx < 0 || block_idx >= NUM_BLOCKS) return; // 유효하지 않은 블록 인덱스
+
+    const Block& block = nand_.blocks[block_idx];
+    for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
+        // VALID 상태인 페이지만 계산
+        if (block.pages[i].state == PageState::VALID) {
+            int lpn = block.pages[i].logical_page_number;
+            // lpn_write_counts_ 맵을 사용하여 온도 판별
+            // .count() 확인 후 .at() 사용 (맵에 없는 키 접근 방지)
+            if (lpn_write_counts_.count(lpn) && lpn_write_counts_.at(lpn) > HOT_LPN_THRESHOLD) {
+                hot_count++;
+            } else {
+                cold_count++;
+            }
+        }
+    }
+}
+
+// NandFlash 객체에 대한 const 참조 반환
+const NandFlash& FTL::get_nand_flash() const {
+    return nand_;
+}
+// ------------------------------------
 // (wear_leveling과 getWAF, print_debug_state 함수는 기존과 동일하게 유지)
 
 void FTL::wear_leveling() {
