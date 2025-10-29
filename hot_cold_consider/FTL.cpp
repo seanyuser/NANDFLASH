@@ -5,8 +5,6 @@
 #include <iomanip> 
 #include <algorithm>
 
-int gc_victim_strategy;
-
 FTL::FTL() : user_writes_(0), user_reads_(0) {
     for (int i = 0; i < NUM_BLOCKS; ++i) {
         nand_.erase(i);

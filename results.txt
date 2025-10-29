@@ -28,3 +28,7 @@ Min WAF:     1.18894
 Max WAF:     1.21584
 
 (Data for 300 successful runs collected)
+
+**closed_hot_block_의 첫 번째를 선택했을 때 WAF의 차이가 있는지 실험**
+
+
