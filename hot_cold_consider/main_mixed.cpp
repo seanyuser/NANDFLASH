@@ -25,10 +25,11 @@ int main() {
     // ✅ NUM_SIMULATIONS = 1로 변경
     const int NUM_SIMULATIONS = 1;
 
-    // --- ✅ 사용자 입력 받기 (시작, 끝, 간격) ---
-    int range_start, range_stop, range_step;
-    std::cout << "Enter observation range (start stop step), like Python's range(start, stop, step): ";
-    std::cin >> range_start >> range_stop >> range_step;
+    // --- ✅ [수정] 코드 내에서 직접 관찰 범위 설정 ---
+    const int range_start = 1000; // 시작 operation 번호
+    const int range_stop  = 2000; // 끝 operation 번호 (이 번호는 포함 안 됨)
+    const int range_step  = 100;  // 간격
+    // -------------------------------------------------
 
     if (range_start < 0 || range_stop <= range_start || range_step <= 0 || range_stop > TOTAL_OPERATIONS) {
         std::cerr << "Invalid range input. Ensure start >= 0, stop > start, step > 0, and stop <= TOTAL_OPERATIONS." << std::endl;
