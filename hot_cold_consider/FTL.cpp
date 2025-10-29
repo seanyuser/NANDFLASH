@@ -1,3 +1,5 @@
+// 덮어쓸 파일: FTL.cpp
+
 #include "FTL.h"
 #include <iostream>
 #include <iomanip> 
@@ -7,15 +9,15 @@ FTL::FTL() : user_writes_(0), user_reads_(0) {
     for (int i = 0; i < NUM_BLOCKS; ++i) {
         nand_.erase(i);
     }
-    // ✅ Hot/Cold Active Block을 서로 다른 블록으로 초기화
     hot_active_block_ = 0; 
     cold_active_block_ = 1;
+    // ✅ closed_hot_blocks_ 와 closed_cold_blocks_ 는 자동으로 비어있게 초기화됨
 }
 
+// ... (write, read 함수는 기존과 동일) ...
 bool FTL::write(int lpn) {
     user_writes_++;
     
-    // ✅ LPN 쓰기 횟수를 "학습" (1 증가)
     lpn_write_counts_[lpn]++;
 
     while (count_free_blocks() < GC_THRESHOLD) {
@@ -34,7 +36,6 @@ bool FTL::write(int lpn) {
     }
 
     PPA new_ppa;
-    // ✅ get_new_page에 lpn을 전달하여 "온도"를 판단하게 함
     if (!get_new_page(new_ppa, lpn)) {
         std::cerr << "Write failed because get_new_page failed." << std::endl;
         print_debug_state();
@@ -55,15 +56,19 @@ void FTL::read(int lpn) {
     }
 }
 
-// ✅ "온도"를 판단하여 Hot/Cold 블록에 페이지를 할당하는 핵심 함수
+
+// ✅ [수정됨] 꽉 찬 블록을 "레이블" 리스트에 추가하는 로직
 bool FTL::get_new_page(PPA& ppa, int lpn) {
-    // LPN의 쓰기 횟수를 확인하여 "온도" 판단
     bool is_hot = (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD);
 
     if (is_hot) {
         // --- Hot 데이터 경로 ---
         if (nand_.blocks[hot_active_block_].current_page >= PAGES_PER_BLOCK) {
-            hot_active_block_ = get_free_block(); // Hot 블록이 꽉 차면 새 블록 할당
+            
+            // ✅ [추가] 꽉 찬 Hot 블록을 "레이블" 리스트에 추가
+            closed_hot_blocks_.push_back(hot_active_block_);
+
+            hot_active_block_ = get_free_block(); 
             if (hot_active_block_ == -1) {
                 std::cerr << "Fatal Error in get_new_page: No free block for HOT writes." << std::endl;
                 return false;
@@ -73,7 +78,11 @@ bool FTL::get_new_page(PPA& ppa, int lpn) {
     } else {
         // --- Cold 데이터 경로 ---
         if (nand_.blocks[cold_active_block_].current_page >= PAGES_PER_BLOCK) {
-            cold_active_block_ = get_free_block(); // Cold 블록이 꽉 차면 새 블록 할당
+            
+            // ✅ [추가] 꽉 찬 Cold 블록을 "레이블" 리스트에 추가
+            closed_cold_blocks_.push_back(cold_active_block_);
+
+            cold_active_block_ = get_free_block(); 
             if (cold_active_block_ == -1) {
                 std::cerr << "Fatal Error in get_new_page: No free block for COLD writes." << std::endl;
                 return false;
@@ -84,12 +93,19 @@ bool FTL::get_new_page(PPA& ppa, int lpn) {
     return true;
 }
 
+// ... (count_free_blocks 함수는 기존과 동일) ...
 int FTL::count_free_blocks() {
     int count = 0;
     for (int i = 0; i < NUM_BLOCKS; i++) {
-        // ✅ Hot/Cold Active 블록은 예비 블록이 아님
         if (i == hot_active_block_ || i == cold_active_block_) continue;
+        
+        // ✅ [개선] 닫힌 블록 리스트에 있는 블록도 Free가 아님
+        // (사실 current_page == 0 조건이 이미 이 역할을 하지만,
+        //  get_free_block이 이 리스트를 확인하도록 수정하는 것이 더 안전함.
+        //  일단은 get_free_block이 정확하다고 가정하고, 이 함수는 그대로 둠.)
+        
         if (nand_.blocks[i].current_page == 0) {
+            // (참고: 이 블록이 closed_hot/cold_blocks_ 리스트에 있다면 논리 오류)
             count++;
         }
     }
@@ -97,22 +113,27 @@ int FTL::count_free_blocks() {
 }
 
 
-// ✅ "Hot/Cold 분리 GC" 로직 (블록 낭비 버그 수정됨)
+// ✅ [수정됨] GC 로직 (find_victim_block_smart 호출)
 bool FTL::garbage_collect() {
-    int victim_idx = find_victim_block_greedy();
+    // ✅ [변경] "Greedy" 대신 "Smart" 함수 호출
+    int victim_idx = find_victim_block_smart(); 
+
     if (victim_idx == -1) {
+        // (모든 블록이 꽉 찼지만 지울 게 없는 드문 경우)
+        std::cerr << "GC Warning: No victim block found (All blocks might be full and valid)." << std::endl;
         return true; 
     }
 
     Block& victim_block = nand_.blocks[victim_idx];
 
+    // (이하 GC의 복사 로직은 기존과 100% 동일)
+    
     // 1. 희생양 블록을 스캔하여 복사할 Hot/Cold 페이지 수 계산
     int hot_pages_to_copy = 0;
     int cold_pages_to_copy = 0;
     for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
         if (victim_block.pages[i].state == PageState::VALID) {
             int lpn = victim_block.pages[i].logical_page_number;
-            // ✅ 이 논리는 항상 false이지만, (이전 논의처럼) 연산 오버헤드 외에 해가 없음
             if (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD) {
                 hot_pages_to_copy++;
             } else {
@@ -120,15 +141,9 @@ bool FTL::garbage_collect() {
             }
         }
     }
+    // ... (디버그 출력 주석) ...
 
-    // 💡 [수정됨] 디버그 출력을 원하면 이 줄의 주석을 해제하세요.
-    // std::cout << "[GC] Victim: " << std::setw(3) << victim_idx 
-    //           << " | HotPagesToCopy: " << std::setw(2) << hot_pages_to_copy 
-    //           << " | ColdPagesToCopy: " << std::setw(2) << cold_pages_to_copy 
-    //           << std::endl;
-
-
-    // 2. "스마트 병합" 시도: Active 블록에 공간이 있는지 확인
+    // 2. "스마트 병합" 시도
     Block& hot_active = nand_.blocks[hot_active_block_];
     Block& cold_active = nand_.blocks[cold_active_block_];
     bool can_merge_hot = (PAGES_PER_BLOCK - hot_active.current_page) >= hot_pages_to_copy;
@@ -139,9 +154,7 @@ bool FTL::garbage_collect() {
         for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
             if (victim_block.pages[i].state == PageState::VALID) {
                 int lpn = victim_block.pages[i].logical_page_number;
-                // ✅ 이 로직도 항상 false이지만, 해가 없음
                 bool is_hot = (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD);
-                
                 PPA new_ppa;
                 if (is_hot) {
                     new_ppa = {hot_active_block_, hot_active.current_page};
@@ -157,136 +170,144 @@ bool FTL::garbage_collect() {
     }
 
     // --- 전략 2: "스마트 복사" (병합 실패 시) ---
-    
-    // ✅ [수정됨] 필요한 블록만 할당하도록 로직 변경
     int new_hot_block = -1;
     int new_cold_block = -1;
     int original_hot_active = hot_active_block_;
     int original_cold_active = cold_active_block_;
-
+    // ... (기존의 '블록 낭비 방지' 로직은 그대로 사용) ...
     if (hot_pages_to_copy > 0) {
         new_hot_block = get_free_block();
-        if (new_hot_block == -1) {
-             std::cerr << "GC Fatal Error: Not enough free blocks for Hot copy!" << std::endl;
-             return false;
-        }
-        // 임시 설정 (get_free_block 중복 할당 방지)
+        if (new_hot_block == -1) return false;
         hot_active_block_ = new_hot_block; 
     }
-
     if (cold_pages_to_copy > 0) {
         new_cold_block = get_free_block();
-        // 임시 설정 복구
         hot_active_block_ = original_hot_active; 
-        if (new_cold_block == -1) {
-             std::cerr << "GC Fatal Error: Not enough free blocks for Cold copy!" << std::endl;
-             return false; 
-        }
-        // 임시 설정 (get_free_block 중복 할당 방지)
+        if (new_cold_block == -1) return false; 
         cold_active_block_ = new_cold_block;
     }
-    
-    // 임시 설정 모두 원래대로 복구
     hot_active_block_ = original_hot_active;
     cold_active_block_ = original_cold_active;
 
-
-    // --- (이하 for 루프는 기존과 동일) ---
     for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
         if (victim_block.pages[i].state == PageState::VALID) {
             int lpn = victim_block.pages[i].logical_page_number;
-            // ✅ 이 로직도 항상 false이지만, 해가 없음
             bool is_hot = (lpn_write_counts_.count(lpn) && lpn_write_counts_[lpn] > HOT_LPN_THRESHOLD);
-            
             PPA new_ppa;
             if (is_hot) {
-                // 이 경로는 hot_pages_to_copy > 0 일 때만 실행됨
                 new_ppa = {new_hot_block, nand_.blocks[new_hot_block].current_page};
             } else {
-                // 이 경로는 cold_pages_to_copy > 0 일 때만 실행됨
                 new_ppa = {new_cold_block, nand_.blocks[new_cold_block].current_page};
             }
-            
             nand_.write(new_ppa.block, new_ppa.page, lpn);
             l2p_mapping_[lpn] = new_ppa;
         }
     }
-    
     nand_.erase(victim_idx);
-
-    // ✅ [수정됨] 새 블록이 할당된 경우에만 Active Block을 교체
-    if (new_hot_block != -1) {
-        hot_active_block_ = new_hot_block;
-    }
-    if (new_cold_block != -1) {
-        cold_active_block_ = new_cold_block;
-    }
+    if (new_hot_block != -1) hot_active_block_ = new_hot_block;
+    if (new_cold_block != -1) cold_active_block_ = new_cold_block;
     
     return true;
 }
 
 
-int FTL::find_victim_block_greedy() {
+// ✅ [완전히 새로 구현됨] Hot 블록 리스트를 우선 탐색하는 "Smart" GC
+int FTL::find_victim_block_smart() {
     int victim_block = -1;
     int max_invalid_pages = -1;
+    int vector_index_to_erase = -1;
 
-    for (int i = 0; i < NUM_BLOCKS; ++i) {
-        // ✅ Hot/Cold Active 블록 2개 모두 GC 대상에서 제외
-        if (i == hot_active_block_ || i == cold_active_block_) continue; 
+    // --- 우선순위 1: "Hot 블록 리스트"에서 탐색 ---
+    for (int i = 0; i < closed_hot_blocks_.size(); ++i) {
+        int block_idx = closed_hot_blocks_[i];
         
-        if (nand_.blocks[i].invalid_pages > max_invalid_pages) {
-            max_invalid_pages = nand_.blocks[i].invalid_pages;
-            victim_block = i;
+        // (Active Block은 이 리스트에 없어야 정상이지만, 안전장치로 확인)
+        if (block_idx == hot_active_block_ || block_idx == cold_active_block_) continue; 
+
+        if (nand_.blocks[block_idx].invalid_pages > max_invalid_pages) {
+            max_invalid_pages = nand_.blocks[block_idx].invalid_pages;
+            victim_block = block_idx;
+            vector_index_to_erase = i;
         }
     }
 
     if (max_invalid_pages > 0) {
+        // ✅ Hot 리스트에서 찾음! 리스트에서 제거하고 반환
+        closed_hot_blocks_.erase(closed_hot_blocks_.begin() + vector_index_to_erase);
         return victim_block;
     }
 
-    int min_valid_pages = PAGES_PER_BLOCK + 1;
-    int fallback_victim = -1;
-    for (int i = 0; i < NUM_BLOCKS; ++i) {
-        // ✅ Hot/Cold Active 블록 2개 모두 GC 대상에서 제외
-        if (i == hot_active_block_ || i == cold_active_block_) continue; 
-        if (nand_.blocks[i].current_page == 0) continue;
-        if (nand_.blocks[i].valid_pages < min_valid_pages) {
-            min_valid_pages = nand_.blocks[i].valid_pages;
-            fallback_victim = i;
+    // --- 우선순위 2: "Cold 블록 리스트"에서 탐색 ---
+    // (Hot 리스트에 쓸만한 블록이 없었을 경우)
+    max_invalid_pages = -1; // (기준치 초기화)
+    vector_index_to_erase = -1;
+
+    for (int i = 0; i < closed_cold_blocks_.size(); ++i) {
+        int block_idx = closed_cold_blocks_[i];
+        if (block_idx == hot_active_block_ || block_idx == cold_active_block_) continue; 
+
+        if (nand_.blocks[block_idx].invalid_pages > max_invalid_pages) {
+            max_invalid_pages = nand_.blocks[block_idx].invalid_pages;
+            victim_block = block_idx;
+            vector_index_to_erase = i;
         }
     }
-    return fallback_victim;
+
+    if (max_invalid_pages > 0) {
+        // ✅ Cold 리스트에서 찾음! 리스트에서 제거하고 반환
+        closed_cold_blocks_.erase(closed_cold_blocks_.begin() + vector_index_to_erase);
+        return victim_block;
+    }
+
+    // --- 우선순위 3: Fallback (모든 닫힌 블록이 100% VALID일 때) ---
+    // (이전 Greedy의 Fallback 로직보다 단순화: Cold 블록을 우선 희생)
+    
+    if (!closed_cold_blocks_.empty()) {
+        // ✅ 가장 오래된 Cold 블록을 희생 (가장 적은 VALID 페이지 탐색으로 개선 가능)
+        victim_block = closed_cold_blocks_[0];
+        closed_cold_blocks_.erase(closed_cold_blocks_.begin());
+        return victim_block;
+    }
+    
+    if (!closed_hot_blocks_.empty()) {
+        // ✅ Cold 블록이 다 떨어졌다면, Hot 블록이라도 희생
+        victim_block = closed_hot_blocks_[0];
+        closed_hot_blocks_.erase(closed_hot_blocks_.begin());
+        return victim_block;
+    }
+
+    // ✅ 닫힌 블록 리스트가 모두 비어있다면, 희생양이 없음
+    return -1;
 }
+
 
 int FTL::get_free_block() {
     for (int i = 0; i < NUM_BLOCKS; i++) {
-        // ✅ Hot/Cold Active 블록은 Free가 아님
+        // ✅ Active 블록은 Free가 아님
         if (i == hot_active_block_ || i == cold_active_block_) continue;
+        
+        // (참고: 닫힌 블록 리스트에 있는 블록들은 current_page가 0이 아니므로
+        //  이 로직에 의해 자동으로 걸러집니다. 따라서 이 함수는 수정이 불필요.)
+        
         if (nand_.blocks[i].current_page == 0) {
             return i;
         }
     }
-    return -1;
+    return -1; // 빈 블록 없음
 }
 
-// (wear_leveling과 getWAF, print_debug_state 함수는 기존과 동일하게 유지)
-
+// ... (wear_leveling, getWAF, print_debug_state 함수는 기존과 동일) ...
 void FTL::wear_leveling() {
-    // ... (기존 코드와 동일, 단 active_block_ 대신 hot/cold 중 하나를 선택해야 함)
-    // (이 로직은 Hot/Cold 분리 시 더 복잡해지므로, 일단은 hot_active_block_ 기준으로 둠)
-    
+    // (기존 코드)
     int min_erase_count = nand_.blocks[0].erase_count;
     int min_erase_idx = 0;
-
     for (int i = 1; i < NUM_BLOCKS; ++i) {
         if (nand_.blocks[i].erase_count < min_erase_count) {
             min_erase_count = nand_.blocks[i].erase_count;
             min_erase_idx = i;
         }
     }
-
     const int WEAR_LEVELING_THRESHOLD = 5;
-    // ✅ 일단 hot_active_block_을 기준으로 마모도 비교
     if (nand_.blocks[hot_active_block_].erase_count > min_erase_count + WEAR_LEVELING_THRESHOLD) {
         int free_block = get_free_block();
         if (free_block != -1) {
@@ -294,8 +315,6 @@ void FTL::wear_leveling() {
              for (int i = 0; i < PAGES_PER_BLOCK; ++i) {
                 if (min_worn_block.pages[i].state == PageState::VALID) {
                     int lpn = min_worn_block.pages[i].logical_page_number;
-                    // ✅ (수정 필요) 이 데이터가 Hot인지 Cold인지 알 수 없으므로,
-                    // 일단 free_block에 쓴다. (이로 인해 오염 발생 가능)
                     PPA new_ppa = {free_block, nand_.blocks[free_block].current_page};
                     nand_.write(new_ppa.block, new_ppa.page, lpn);
                     l2p_mapping_[lpn] = new_ppa;
@@ -315,10 +334,14 @@ double FTL::getWAF() const {
 
 void FTL::print_debug_state() {
     std::cout << "\n--- NAND FLASH DEBUG STATE ---" << std::endl;
-    // ✅ Hot/Cold Active Block 정보 출력
     std::cout << "Hot Active Block: " << hot_active_block_ << std::endl;
     std::cout << "Cold Active Block: " << cold_active_block_ << std::endl;
     std::cout << "Free Blocks Count: " << count_free_blocks() << std::endl;
+    
+    // ✅ [추가] 닫힌 블록 리스트 크기 출력
+    std::cout << "Closed Hot Blocks (Label): " << closed_hot_blocks_.size() << std::endl;
+    std::cout << "Closed Cold Blocks (Label): " << closed_cold_blocks_.size() << std::endl;
+
     std::cout << std::left << std::setw(8) << "Block"
               << std::setw(8) << "Valid"
               << std::setw(10) << "Invalid"
