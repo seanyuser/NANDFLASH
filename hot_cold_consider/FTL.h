@@ -15,7 +15,7 @@ struct PPA {
 };
 
 const int GC_THRESHOLD = 5;
-const int HOT_LPN_THRESHOLD = 10;
+const int HOT_LPN_THRESHOLD = 1;
 
 class FTL {
 public:
