@@ -305,6 +305,11 @@ void FTL::get_block_hot_cold_counts(int block_idx, int& hot_count, int& cold_cou
 const NandFlash& FTL::get_nand_flash() const {
     return nand_;
 }
+
+const std::map<int, int>& FTL::get_lpn_write_counts() const {
+    return lpn_write_counts_;
+}
+
 // ------------------------------------
 // (wear_leveling과 getWAF, print_debug_state 함수는 기존과 동일하게 유지)
 

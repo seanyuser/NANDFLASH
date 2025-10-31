@@ -20,22 +20,22 @@ int main() {
     // (GC 전략 사용 시 출력 코드 추가)
     // std::cout << "Using GC Victim Strategy: " << ... << std::endl;
 
-    const int TOTAL_OPERATIONS = 500000;
+    const int TOTAL_OPERATIONS = 300000;
     const int WRITE_PERCENTAGE = 80;
     const int NUM_SIMULATIONS = 1;
 
     // --- 관찰 Operation 범위 설정 ---
-    const int range_start = 75500;
-    const int range_stop  = 75800;
-    const int range_step  = 5;
+    const int range_start = 5500;
+    const int range_stop  = 5600;
+    const int range_step  = 90;
     // ------------------------------------
 
     // --- 관찰 Block 범위 설정 ---
     const int observe_block_start = 0; // 시작 블록 번호 (포함)
-    const int observe_block_stop  = 40; // 끝 블록 번호 (포함 안 됨, 즉 0~7 출력)
+    const int observe_block_stop  = 40; // 끝 블록 번호 (포함 안 됨)
     // ----------------------------------
 
-    // --- 범위 유효성 검사 ---
+    // ... (범위 유효성 검사 및 설정 출력은 기존과 동일) ...
     if (range_start < 0 || range_stop <= range_start || range_step <= 0 || range_stop > TOTAL_OPERATIONS) {
         std::cerr << "Invalid operation range settings in code." << std::endl;
         return 1;
@@ -65,48 +65,25 @@ int main() {
 
         for (int i = 0; i < TOTAL_OPERATIONS; ++i) {
 
-            // (상태 출력 로직)
+            // (상태 출력 로직은 기존과 동일)
             if (i >= range_start && i < range_stop && (i - range_start) % range_step == 0) {
+                // ... (이전의 상태 출력 코드) ...
                 std::cout << "\n--- Operation #" << i << " State ---" << std::endl;
                 int current_hot_active = ftl.get_hot_active_block();
                 int current_cold_active = ftl.get_cold_active_block();
                 const NandFlash& nand = ftl.get_nand_flash();
-
-                std::cout << "Hot Active: " << current_hot_active
-                          << ", Cold Active: " << current_cold_active << std::endl;
-                
-                // ✅ --- [수정] 구분선 길이 및 헤더 간격 조정 ---
+                std::cout << "Hot Active: " << current_hot_active << ", Cold Active: " << current_cold_active << std::endl;
                 std::cout << "------------------------------------------------------------------" << std::endl;
-                        std::cout << std::left
-                          << std::setw(8) << "Block"
-                          << std::setw(10) << "Hot(V)"
-                          << std::setw(10) << "Cold(V)"
-                          << std::setw(10) << "Current"
-                          << std::setw(10) << "Valid"
-                          << std::setw(10) << "Invalid" << std::endl;
+                std::cout << std::left << std::setw(8) << "Block" << std::setw(10) << "Hot(V)" << std::setw(10) << "Cold(V)" << std::setw(10) << "Current" << std::setw(10) << "Valid" << std::setw(10) << "Invalid" << std::endl;
                 std::cout << "------------------------------------------------------------------" << std::endl;
-
                 for (int block_idx = observe_block_start; block_idx < observe_block_stop; ++block_idx) {
                     int hot_count, cold_count;
                     ftl.get_block_hot_cold_counts(block_idx, hot_count, cold_count);
                     const Block& block = nand.blocks[block_idx];
-
-                            std::cout << std::left
-                              << std::setw(8) << block_idx
-                              << std::setw(10) << hot_count
-                              << std::setw(10) << cold_count
-                              << std::setw(10) << block.current_page
-                              << std::setw(10) << block.valid_pages
-                              << std::setw(10) << block.invalid_pages;
-                    
-                    // ✅ --- [삭제] Active 블록 표시 제거 ---
-                    // if (block_idx == current_hot_active) std::cout << " <- HOT";
-                    // if (block_idx == current_cold_active) std::cout << " <- COLD";
+                    std::cout << std::left << std::setw(8) << block_idx << std::setw(10) << hot_count << std::setw(10) << cold_count << std::setw(10) << block.current_page << std::setw(10) << block.valid_pages << std::setw(10) << block.invalid_pages;
                     std::cout << std::endl;
-                    // ------------------------------------
                 }
                 std::cout << "------------------------------------------------------------------" << std::endl;
-                // ------------------------------------------
             }
 
             // (워크로드 실행 로직은 90/10 확률 유지)
@@ -117,7 +94,6 @@ int main() {
                 } else {
                     lpn = (rand() % COLD_ZONE_LPNS) + HOT_ZONE_LPNS;
                 }
-
                 if (!ftl.write(lpn)) {
                     std::cout << "\n--- Simulation stopped due to a fatal error at operation " << i + 1 << " ---" << std::endl;
                     ftl.print_debug_state();
@@ -132,6 +108,33 @@ int main() {
         final_wafs.push_back(ftl.getWAF());
 
         std::cout << "\nSimulation " << sim + 1 << "/" << NUM_SIMULATIONS << " completed." << std::endl;
+
+        // ✅ --- [추가] 시뮬레이션 종료 후 Erase Count 출력 (이전 요청) ---
+        std::cout << "\n--- Final Erase Counts per Block (After " << TOTAL_OPERATIONS << " ops) ---" << std::endl;
+        const NandFlash& nand = ftl.get_nand_flash();
+        for (int i = 0; i < NUM_BLOCKS; ++i) {
+            std::cout << "Blk " << std::setw(3) << i << ": " << std::setw(5) << nand.blocks[i].erase_count << " | ";
+            if ((i + 1) % 8 == 0 || i == NUM_BLOCKS - 1) {
+                std::cout << std::endl;
+            }
+        }
+        // ----------------------------------------------------
+
+        // ✅ --- [추가] 시뮬레이션 종료 후 LPN 쓰기 횟수 출력 (이번 요청) ---
+        std::cout << "\n--- Final LPN Write Counts (After " << TOTAL_OPERATIONS << " ops) ---" << std::endl;
+        const std::map<int, int>& lpn_counts = ftl.get_lpn_write_counts();
+        for (int lpn = 0; lpn < NUM_LOGICAL_PAGES; ++lpn) {
+            int count = 0;
+            if (lpn_counts.count(lpn)) {
+                count = lpn_counts.at(lpn);
+            }
+            std::cout << "LPN " << std::setw(4) << lpn << ": " << std::setw(5) << count << " | ";
+            // 6개씩 끊어서 출력
+            if ((lpn + 1) % 6 == 0 || lpn == NUM_LOGICAL_PAGES - 1) {
+                std::cout << std::endl;
+            }
+        }
+        // ----------------------------------------------------
 
     } // End of NUM_SIMULATIONS loop
 
